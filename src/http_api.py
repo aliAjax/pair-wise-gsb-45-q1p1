@@ -7,6 +7,7 @@ from typing import Any, Dict
 from urllib.parse import parse_qs, urlparse
 
 from .domain import Actor, DomainError, PermissionDenied, ValidationError
+from .yard_api import yard_get, yard_post
 
 
 RECORD_RE = re.compile(r"^/api/records/(\d+)$")
@@ -14,7 +15,7 @@ ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
 
 
-def make_handler(service: Any, static_dir: Path):
+def make_handler(service: Any, static_dir: Path, yard_service: Any = None):
     class Handler(BaseHTTPRequestHandler):
         server_version = "port-berth/1.0"
 
@@ -71,6 +72,20 @@ def make_handler(service: Any, static_dir: Path):
                     page = (static_dir / "index.html").read_bytes()
                     self._send(200, page, "text/html; charset=utf-8")
                     return
+                if parsed.path == "/yard":
+                    page = (static_dir / "yard.html").read_bytes()
+                    self._send(200, page, "text/html; charset=utf-8")
+                    return
+                if parsed.path.startswith("/api/yard/"):
+                    if yard_service is None:
+                        self._send(503, {"error": "yard_disabled", "message": "堆场服务未启用"})
+                        return
+                    result = yard_get(yard_service, parsed.path, parsed.query, self._actor())
+                    if result is None:
+                        self._send(404, {"error": "not_found", "message": "路径不存在"})
+                    else:
+                        self._send(200, result)
+                    return
                 if parsed.path == "/api/records":
                     query = parse_qs(parsed.query)
                     records = service.list_records(self._actor(), state=query.get("state", [None])[0], limit=int(query.get("limit", ["100"])[0]))
@@ -95,6 +110,16 @@ def make_handler(service: Any, static_dir: Path):
             try:
                 parsed = urlparse(self.path)
                 body = self._body()
+                if parsed.path.startswith("/api/yard/"):
+                    if yard_service is None:
+                        self._send(503, {"error": "yard_disabled", "message": "堆场服务未启用"})
+                        return
+                    result = yard_post(yard_service, parsed.path, body, self._actor())
+                    if result is None:
+                        self._send(404, {"error": "not_found", "message": "路径不存在"})
+                    else:
+                        self._send(result[0], result[1])
+                    return
                 if parsed.path == "/api/records":
                     record = service.create(self._actor(), body.get("reference", ""), body.get("data", {}))
                     self._send(201, record)
@@ -114,5 +139,5 @@ def make_handler(service: Any, static_dir: Path):
     return Handler
 
 
-def create_server(host: str, port: int, service: Any, static_dir: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(service, static_dir))
+def create_server(host: str, port: int, service: Any, static_dir: Path, yard_service: Any = None) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(service, static_dir, yard_service))

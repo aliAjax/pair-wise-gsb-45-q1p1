@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>危险品堆场与装船计划</title>
+<style>
+  :root { --line:#d7dde3; --bg:#f4f6f8; --ink:#17212b; --accent:#1f6feb; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:0; color:var(--ink); background:var(--bg); }
+  main { max-width:1100px; margin:auto; padding:1.5rem; }
+  h1 { font-size:1.4rem; }
+  h2 { font-size:1.05rem; margin:1.4rem 0 .6rem; }
+  .bar { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; background:#fff; border:1px solid var(--line); border-radius:8px; padding:.7rem 1rem; }
+  select, input, button { font:inherit; padding:.45rem .6rem; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { cursor:pointer; background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.secondary { background:#fff; color:var(--ink); }
+  button.danger { background:#c0392b; border-color:#c0392b; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:8px; padding:1rem; }
+  table { border-collapse:collapse; width:100%; font-size:.85rem; }
+  th, td { border-bottom:1px solid var(--line); padding:.4rem .5rem; text-align:left; white-space:nowrap; }
+  tr:last-child td { border-bottom:none; }
+  .tag { display:inline-block; padding:.1rem .45rem; border-radius:999px; font-size:.75rem; }
+  .pending { background:#fff3cd; color:#7a5b00; }
+  .placed { background:#d1e7dd; color:#0f5132; }
+  .loaded { background:#cfe2ff; color:#084298; }
+  .open { background:#f8d7da; color:#842029; }
+  .done { background:#e2e3e5; color:#41464b; }
+  .cancelled { background:#e2e3e5; color:#41464b; }
+  pre { background:#0d1117; color:#c9d1d9; padding:.8rem; border-radius:8px; overflow:auto; font-size:.78rem; max-height:260px; }
+  .formrow { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-bottom:.5rem; }
+  .formrow label { font-size:.8rem; color:#555; }
+  .reason { color:#9a6700; font-size:.78rem; }
+  .muted { color:#666; font-size:.82rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>危险品堆场与装船计划</h1>
+  <div class="bar">
+    <label>当前身份
+      <select id="role">
+        <option value="gate_clerk">闸口登记员 gate_clerk</option>
+        <option value="yard_planner">堆场计划员 yard_planner</option>
+        <option value="tally_clerk">理货员 tally_clerk</option>
+        <option value="vessel_planner">船期计划员 vessel_planner</option>
+      </select>
+    </label>
+    <input id="user" value="demo-user" size="12">
+    <button class="secondary" onclick="loadAll()">刷新全部</button>
+    <span class="muted">不同身份对应登记 / 落位 / 理货 / 装船计划权限</span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>① 箱区资料</h2>
+      <table><thead><tr><th>箱区</th><th>名称</th><th>单垛限重(t)</th><th>限层</th><th>垛位</th><th>理货</th><th></th></tr></thead>
+      <tbody id="blocks"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>② 到港登记</h2>
+      <div class="formrow"><label>箱号</label><input id="c_no" value="CBHU2001" size="11"></div>
+      <div class="formrow"><label>类别</label><select id="c_class"></select>
+        <label>重量(t)</label><input id="c_weight" type="number" value="10" step="0.1" style="width:5rem">
+        <label>到港时段</label><input id="c_hour" type="number" value="8" min="0" max="23" style="width:4.5rem"></div>
+      <button onclick="registerContainer()">登记到港（进待落区）</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>③ 落位 / 改配</h2>
+    <table><thead><tr><th>ID</th><th>箱号</th><th>类别</th><th>重量</th><th>到港</th><th>状态</th><th>位置</th><th>待落区原因</th><th>版本</th><th>操作</th></tr></thead>
+    <tbody id="containers"></tbody></table>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>④ 装船计划（锁定箱区·吊机·时段）</h2>
+      <div class="formrow">
+        <label>船名</label><input id="p_vessel" value="MV-PACIFIC" size="12">
+        <label>箱区</label><select id="p_block"></select>
+        <label>吊机</label><select id="p_crane"></select>
+      </div>
+      <div class="formrow">
+        <label>开始(时)</label><input id="p_start" type="number" value="8" min="0" max="23" style="width:4.5rem">
+        <label>结束(时)</label><input id="p_end" type="number" value="14" min="1" max="24" style="width:4.5rem">
+        <button onclick="createPlan()">编制并锁定</button>
+      </div>
+      <table><thead><tr><th>ID</th><th>船名</th><th>箱区</th><th>吊机</th><th>时段</th><th>状态</th><th>版本</th><th>操作</th></tr></thead>
+      <tbody id="plans"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>⑤ 响应 / 审计</h2>
+      <pre id="output">操作结果显示在这里。</pre>
+    </div>
+  </div>
+  <p class="muted">规则：同垛只放相容类别；重量/层数受箱区限制；放不下留在待落区并注明原因。吊机与箱区同时段均为独占；箱区未理货不能装船；改配先释放原箱位。</p>
+</main>
+
+<script>
+const CLASSES = ["1.1","1.4","2.1","2.2","3","4.1","4.2","4.3","5.1","5.2","6.1","6.2","7","8","9"];
+let blocks = [], cranes = [], containers = [], plans = [];
+
+function headers(method) {
+  const h = {"X-User-Id": document.getElementById("user").value || "demo",
+             "X-Role": document.getElementById("role").value};
+  if (method) h["Content-Type"] = "application/json";
+  return h;
+}
+async function api(path, method, body) {
+  const res = await fetch(path, {method: method || "GET", headers: headers(!!body),
+                                 body: body ? JSON.stringify(body) : undefined});
+  const data = await res.json();
+  document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+  if (!res.ok) throw new Error(data.message || res.status);
+  return data;
+}
+function tag(state) { return `<span class="tag ${state}">${state}</span>`; }
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+async function loadAll() {
+  blocks = (await (await fetch("/api/yard/blocks", {headers: headers()})).json()).items;
+  cranes = (await (await fetch("/api/yard/cranes", {headers: headers()})).json()).items;
+  containers = (await (await fetch("/api/yard/containers?limit=100", {headers: headers()})).json()).items;
+  plans = (await (await fetch("/api/yard/plans?limit=100", {headers: headers()})).json()).items;
+  render();
+}
+
+function render() {
+  document.getElementById("blocks").innerHTML = blocks.map(b => `
+    <tr><td><b>${b.code}</b></td><td>${esc(b.name)}</td><td>${b.max_stack_weight_t}</td><td>${b.max_layers}</td><td>${b.stack_count}</td>
+    <td>${b.tally_completed ? "✅ 已理货" : "—"}</td>
+    <td><button class="secondary" onclick="tally('${b.code}',${b.version},${!b.tally_completed})">${b.tally_completed ? "撤销理货" : "完成理货"}</button></td></tr>`).join("");
+  document.getElementById("p_block").innerHTML = blocks.map(b => `<option>${b.code}</option>`).join("");
+  document.getElementById("p_crane").innerHTML = cranes.map(c => `<option value="${c.code}">${c.code} ${esc(c.name)}</option>`).join("");
+  document.getElementById("c_class").innerHTML = CLASSES.map(c => `<option ${c==="3"?"selected":""}>${c}</option>`).join("");
+
+  document.getElementById("containers").innerHTML = containers.map(c => {
+    const slot = c.block_code ? `${c.block_code} 垛${c.stack_no} 层${c.layer_no}` : "待落区";
+    const reason = c.pending_reason ? `<span class="reason">${c.pending_reason}<br>${esc(c.pending_detail)}</span>` : "";
+    const ops = c.state === "loaded" ? "" :
+      `<button class="secondary" onclick="place(${c.id},${c.version},false)">落位</button>
+       <button class="secondary" onclick="place(${c.id},${c.version},true)">改配</button>
+       <button class="secondary" onclick="audit('container',${c.id})">审计</button>`;
+    return `<tr><td>${c.id}</td><td>${esc(c.container_no)}</td><td>${c.hazard_class}</td><td>${c.weight_t}</td>
+      <td>${c.arrival_hour}时</td><td>${tag(c.state)}</td><td>${slot}${c.target_block_code && !c.block_code ? `（拟往${c.target_block_code}）` : ""}</td>
+      <td>${reason}</td><td>${c.version}</td><td>${ops}</td></tr>`;
+  }).join("");
+
+  document.getElementById("plans").innerHTML = plans.map(p => {
+    const ops = p.state === "open"
+      ? `<button onclick="completePlan(${p.id},${p.version})">装船完成</button>
+         <button class="danger" onclick="cancelPlan(${p.id},${p.version})">改期释放</button>
+         <button class="secondary" onclick="audit('plan',${p.id})">审计</button>`
+      : `<button class="secondary" onclick="audit('plan',${p.id})">审计</button>`;
+    return `<tr><td>${p.id}</td><td>${esc(p.vessel)}</td><td>${p.block_code}</td><td>${p.crane_code}</td>
+      <td>${p.start_hour}-${p.end_hour}时</td><td>${tag(p.state)}</td><td>${p.version}</td><td>${ops}</td></tr>`;
+  }).join("");
+}
+
+async function registerContainer() {
+  await api("/api/yard/containers", "POST", {data: {
+    container_no: document.getElementById("c_no").value,
+    hazard_class: document.getElementById("c_class").value,
+    weight_t: parseFloat(document.getElementById("c_weight").value),
+    arrival_hour: parseInt(document.getElementById("c_hour").value, 10),
+  }});
+  await loadAll();
+}
+async function place(id, version, reallocate) {
+  const block = prompt("落位箱区（如 A01 / A02 / B01 / C01）", "A01");
+  if (!block) return;
+  const data = await api(`/api/yard/containers/${id}/${reallocate ? "reallocate" : "place"}`, "POST",
+                         {expected_version: version, data: {block_code: block}});
+  if (data.state === "pending") alert("放不下，留在待落区：" + (data.pending_detail || data.pending_reason));
+  await loadAll();
+}
+async function tally(code, version, completed) {
+  await api(`/api/yard/blocks/${code}/tally`, "POST", {expected_version: version, data: {tally_completed: completed}});
+  await loadAll();
+}
+async function createPlan() {
+  await api("/api/yard/plans", "POST", {data: {
+    vessel: document.getElementById("p_vessel").value,
+    block_code: document.getElementById("p_block").value,
+    crane_code: document.getElementById("p_crane").value,
+    start_hour: parseInt(document.getElementById("p_start").value, 10),
+    end_hour: parseInt(document.getElementById("p_end").value, 10),
+  }});
+  await loadAll();
+}
+async function completePlan(id, version) {
+  await api(`/api/yard/plans/${id}/complete`, "POST", {expected_version: version, data: {}});
+  await loadAll();
+}
+async function cancelPlan(id, version) {
+  const reason = prompt("改期/释放原因", "船期调整");
+  if (!reason) return;
+  await api(`/api/yard/plans/${id}/cancel`, "POST", {expected_version: version, data: {reason}});
+  await loadAll();
+}
+async function audit(kind, id) {
+  await api(`/api/yard/${kind}s/${id}/audit`);
+}
+loadAll().catch(e => document.getElementById("output").textContent = e.message);
+</script>
+</body>
+</html>

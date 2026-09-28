@@ -7,6 +7,9 @@ from src.http_api import create_server
 from src.repository import Repository
 from src.rules import DomainRules
 from src.service import Service
+from src.yard_repository import YardRepository
+from src.yard_rules import YardRules
+from src.yard_service import YardService
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -18,6 +21,10 @@ def build_service(db_path: str) -> Service:
     repository = Repository(db_path)
     audit = AuditRecorder(repository)
     return Service(repository, DomainRules(), audit)
+
+
+def build_yard_service(db_path: str) -> YardService:
+    return YardService(YardRepository(db_path), YardRules())
 
 
 def parse_args():
@@ -32,8 +39,9 @@ def main() -> None:
     args = parse_args()
     Path(args.db).expanduser().resolve().parent.mkdir(parents=True, exist_ok=True)
     service = build_service(args.db)
-    server = create_server(args.host, args.port, service, BASE_DIR / "static")
-    print("港口泊位与航道调度 listening on http://%s:%s" % (args.host, args.port), flush=True)
+    yard_service = build_yard_service(args.db)
+    server = create_server(args.host, args.port, service, BASE_DIR / "static", yard_service)
+    print("港口调度（泊位+堆场装船）listening on http://%s:%s" % (args.host, args.port), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
