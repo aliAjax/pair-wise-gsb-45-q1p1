@@ -65,7 +65,7 @@ class Service:
     def timeline(self, actor: Actor, record_id: int) -> List[Dict[str, Any]]:
         actor = self._actor(actor)
         self._ensure_known_role(actor)
-        return self.audit.timeline(record_id)
+        return self.audit.timeline("record", record_id)
 
     def stats(self, actor: Actor) -> Dict[str, int]:
         actor = self._actor(actor)

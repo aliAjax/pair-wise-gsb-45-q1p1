@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>危险品堆场与装船计划</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 1.5rem; color: #17212b; background: #f7f8fa; }
+    main { max-width: 1180px; margin: auto; }
+    h1 { font-size: 1.4rem; } h2 { font-size: 1.05rem; margin-top: 1.6rem; border-left: 4px solid #2b6cb0; padding-left: .5rem; }
+    .card { background: #fff; border: 1px solid #e2e6ea; border-radius: 10px; padding: 1rem 1.2rem; margin-bottom: 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; }
+    table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+    th, td { border: 1px solid #e2e6ea; padding: .35rem .5rem; text-align: left; vertical-align: top; }
+    th { background: #f1f4f8; }
+    input, select, button { padding: .4rem .55rem; font-size: .85rem; }
+    button { cursor: pointer; border: 1px solid #2b6cb0; background: #2b6cb0; color: #fff; border-radius: 6px; }
+    button.secondary { background: #fff; color: #2b6cb0; }
+    button.danger { border-color: #c53030; background: #c53030; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .4rem 0; }
+    .tag { display: inline-block; padding: .05rem .45rem; border-radius: 999px; font-size: .75rem; }
+    .tag.pending { background: #fff3cd; color: #8a6d3b; }
+    .tag.placed { background: #d4edda; color: #1e6b34; }
+    .tag.loaded { background: #d6e4ff; color: #274690; }
+    .tag.draft { background: #e2e8f0; color: #334155; }
+    .tag.confirmed { background: #d4edda; color: #1e6b34; }
+    .tag.executed { background: #d6e4ff; color: #274690; }
+    .tag.cancelled { background: #f8d7da; color: #842029; }
+    .stack { border: 1px dashed #b8c2cc; border-radius: 8px; padding: .5rem; margin: .3rem 0; }
+    .muted { color: #64748b; font-size: .8rem; }
+    .reason { color: #b7791f; font-size: .78rem; }
+    #toast { position: fixed; top: 1rem; right: 1rem; max-width: 360px; white-space: pre-wrap; border-radius: 8px; padding: .7rem 1rem; display: none; }
+    #toast.ok { background: #d4edda; color: #1e6b34; } #toast.err { background: #f8d7da; color: #842029; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>危险品集装箱堆场与装船计划</h1>
+  <div class="row">
+    <a href="/">← 返回泊位与航道调度</a>
+    <span class="muted">|</span>
+    <label class="muted">当前角色
+      <select id="role">
+        <option value="port_controller">调度员（全部权限）</option>
+        <option value="yard_planner">堆场计划员（登记）</option>
+        <option value="yard_worker">堆场员（落位/改配/释放）</option>
+        <option value="tally_clerk">理货员</option>
+        <option value="vessel_planner">船舶计划员（装船）</option>
+      </select>
+    </label>
+    <button class="secondary" onclick="loadAll()">刷新</button>
+  </div>
+
+  <h2>1. 箱区平面图（层数 / 重量 / 类别 / 理货版本）</h2>
+  <div id="zones" class="grid"></div>
+
+  <h2>2. 危险品箱到港登记</h2>
+  <div class="card">
+    <div class="row">
+      <input id="f-no" placeholder="箱号 如ABCD1234567" size="16">
+      <select id="f-class"></select>
+      <input id="f-weight" type="number" step="0.1" placeholder="重量(吨)" style="width:90px">
+      <select id="f-zone"></select>
+      <input id="f-date" type="date">
+      <select id="f-shift"></select>
+      <button onclick="registerBox()">登记到港</button>
+    </div>
+    <div class="muted">登记后箱子进入待落区，由堆场员落位。</div>
+  </div>
+
+  <h2>3. 待落区（放不下时说明原因）</h2>
+  <div class="card"><table><thead><tr><th>箱号</th><th>类别</th><th>重量</th><th>目标箱区</th><th>到港</th><th>原因</th><th>操作</th></tr></thead>
+    <tbody id="pending-body"></tbody></table></div>
+
+  <h2>4. 已落位 / 已装船集装箱</h2>
+  <div class="card"><table><thead><tr><th>箱号</th><th>状态</th><th>类别</th><th>重量</th><th>箱区/垛位/层</th><th>操作</th></tr></thead>
+    <tbody id="container-body"></tbody></table></div>
+
+  <h2>5. 箱区理货</h2>
+  <div class="card"><div id="tally-row" class="row"></div>
+    <div class="muted">理货记录当前箱区数据版本；落位、改配、释放、装船都会推进版本，旧理货自动失效，未重新理货不能装船。</div></div>
+
+  <h2>6. 装船计划（锁定箱区、吊机、时段）</h2>
+  <div class="card">
+    <div class="row">
+      <input id="p-ref" placeholder="计划编号 LOAD-1001" size="14">
+      <input id="p-vessel" placeholder="船名" size="12">
+      <select id="p-zone"></select>
+      <select id="p-crane"></select>
+      <input id="p-date" type="date">
+      <input id="p-start" type="number" min="0" max="23" placeholder="起" style="width:60px">
+      <input id="p-end" type="number" min="1" max="24" placeholder="止" style="width:60px">
+      <input id="p-nos" placeholder="箱号，逗号分隔" size="34">
+      <button onclick="createPlan()">编制计划</button>
+    </div>
+    <table><thead><tr><th>编号</th><th>船</th><th>箱区</th><th>吊机</th><th>时段</th><th>箱量</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody id="plan-body"></tbody></table>
+  </div>
+
+  <pre id="timeline" class="card" style="display:none"></pre>
+</main>
+<div id="toast"></div>
+
+<script>
+const state = {reference: null, containers: [], plans: []};
+let currentTimeline = null;
+
+function headers() { return {"X-User-Id":"web-" + document.getElementById("role").value, "X-Role": document.getElementById("role").value, "X-Org":"demo", "Content-Type":"application/json"}; }
+function toast(msg, ok) { const t = document.getElementById("toast"); t.textContent = msg; t.className = ok ? "ok" : "err"; t.style.display = "block"; setTimeout(() => t.style.display = "none", 4000); }
+async function api(path, method, body) {
+  const res = await fetch(path, {method: method || "GET", headers: headers(), body: body ? JSON.stringify(body) : undefined});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { throw new Error((data.message || res.statusText)); }
+  return data;
+}
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function tag(s) { return `<span class="tag ${s}">${s}</span>`; }
+function today() { return new Date().toISOString().slice(0, 10); }
+
+async function loadReference() {
+  state.reference = await api("/api/yard/reference");
+  const r = state.reference;
+  document.getElementById("f-class").innerHTML = r.dg_classes.map(c => `<option value="${c.code}">${c.code} ${c.name}</option>`).join("");
+  document.getElementById("f-shift").innerHTML = r.shifts.map(s => `<option value="${s.code}">${s.name} ${s.start_hour}:00-${s.end_hour}:00</option>`).join("");
+  const zones = r.zones.map(z => `<option value="${z.code}">${z.code} ${z.name}</option>`).join("");
+  document.getElementById("f-zone").innerHTML = zones;
+  document.getElementById("p-zone").innerHTML = zones;
+  document.getElementById("p-crane").innerHTML = r.cranes.map(c => `<option value="${c.code}">${c.code} ${c.name}</option>`).join("");
+  document.getElementById("f-date").value = today(); document.getElementById("p-date").value = today();
+  renderTally();
+}
+
+async function loadZones() {
+  const zones = await api("/api/zones");
+  const tallies = Object.fromEntries(state.reference.tallies.map(t => [t.zone_code, t]));
+  document.getElementById("zones").innerHTML = zones.map(z => `
+    <div class="card">
+      <strong>${z.code} ${esc(z.name)}</strong>
+      <div class="muted">限${z.max_layers}层 · 每垛限重${z.max_stack_weight_t}吨 · 数据版本 v${z.data_version}
+      · 理货版本 ${tallies[z.code] ? "v" + tallies[z.code].data_version : "未理货"}</div>
+      <div class="muted">已落位 ${z.placed_count} 箱，待落 ${z.pending_count} 箱</div>
+      ${z.stacks.map(s => `<div class="stack"><strong>${s.code}</strong> 第${s.layers}/${z.max_layers}层 · ${s.weight_t}/${z.max_stack_weight_t}t
+        <div class="muted">类别：${s.classes.length ? s.classes.join("、") : "空垛"}</div></div>`).join("")}
+    </div>`).join("");
+}
+
+async function loadContainers() {
+  state.containers = (await api("/api/containers?limit=500")).items;
+  const pending = state.containers.filter(c => c.state === "pending");
+  document.getElementById("pending-body").innerHTML = pending.length ? pending.map(c => `<tr>
+    <td>${c.container_no}</td><td>${c.payload.dg_class}</td><td>${c.payload.weight_t}</td><td>${c.payload.zone_code}</td>
+    <td>${c.payload.arrival_date} ${c.payload.arrival_shift}</td>
+    <td class="reason">${esc(c.pending_reason)}</td>
+    <td class="row"><button onclick="place(${c.id},${c.version},'')">自动落位</button>
+      <input id="stk-${c.id}" placeholder="指定垛位" size="8" onchange="place(${c.id},${c.version},this.value)">
+      <select id="rz-${c.id}">${state.reference.zones.map(z => `<option${z.code===c.payload.zone_code?" selected":""}>${z.code}</option>`).join("")}</select>
+      <button class="secondary" onclick="reassign(${c.id},${c.version},'rz-${c.id}','')">改配箱区</button></td></tr>`).join("")
+    : `<tr><td colspan="7" class="muted">待落区为空</td></tr>`;
+  const rest = state.containers.filter(c => c.state !== "pending");
+  document.getElementById("container-body").innerHTML = rest.length ? rest.map(c => `<tr>
+    <td>${c.container_no}</td><td>${tag(c.state)}</td><td>${c.payload.dg_class}</td><td>${c.payload.weight_t}</td>
+    <td>${c.payload.zone_code} / ${c.stack_code ?? "-"} / ${c.layer_no ?? "-"}层</td>
+    <td class="row">
+      <button class="secondary" onclick="reassign(${c.id},${c.version},'rz2-${c.id}','')">改配
+        <select id="rz2-${c.id}">${state.reference.zones.map(z => `<option${z.code===c.payload.zone_code?" selected":""}>${z.code}</option>`).join("")}</select></button>
+      <button class="danger" onclick="releaseBox(${c.id},${c.version})">释放回待落区</button>
+      <button class="secondary" onclick="showTimeline('container',${c.id})">审计</button></td></tr>`).join("")
+    : `<tr><td colspan="6" class="muted">暂无</td></tr>`;
+}
+
+function renderTally() {
+  const tallies = Object.fromEntries(state.reference.tallies.map(t => [t.zone_code, t]));
+  document.getElementById("tally-row").innerHTML = state.reference.zones.map(z =>
+    `<button class="secondary" onclick="tally('${z.code}')">完成${z.code}区理货</button>` +
+    `<span class="muted">${tallies[z.code] ? "当前 v" + tallies[z.code].data_version + "（" + tallies[z.code].completed_by + "）" : "未理货"}</span>`
+  ).join("&nbsp;&nbsp;");
+}
+
+async function loadPlans() {
+  state.plans = (await api("/api/plans?limit=200")).items;
+  document.getElementById("plan-body").innerHTML = state.plans.length ? state.plans.map(p => `<tr>
+    <td>${p.reference}</td><td>${esc(p.payload.vessel)}</td><td>${p.payload.zone_code}</td><td>${p.payload.crane_code}</td>
+    <td>${p.payload.plan_date} ${p.payload.start_hour}-${p.payload.end_hour}时</td><td>${p.payload.container_nos.length}</td>
+    <td>${tag(p.state)}</td>
+    <td class="row">${p.state === "draft" ? `<button onclick="planAction(${p.id},${p.version},'confirm',{})">锁定</button>` : ""}
+      ${p.state === "confirmed" ? `<button onclick="planAction(${p.id},${p.version},'execute',{})">装船</button>` : ""}
+      ${["draft","confirmed"].includes(p.state) ? `<button class="danger" onclick="cancelPlan(${p.id},${p.version})">取消</button>` : ""}
+      <button class="secondary" onclick="showTimeline('plan',${p.id})">审计</button></td></tr>`).join("")
+    : `<tr><td colspan="8" class="muted">暂无装船计划</td></tr>`;
+}
+
+async function registerBox() {
+  const data = {container_no: f_no.value.trim().toUpperCase(), dg_class: f_class.value, weight_t: Number(f_weight.value),
+    zone_code: f_zone.value, arrival_date: f_date.value, arrival_shift: f_shift.value};
+  try { await api("/api/containers", "POST", {data}); toast("已登记，进入待落区", true); await loadAll(); }
+  catch (e) { toast(e.message); }
+}
+async function place(id, v, stack) {
+  try { const c = await api(`/api/containers/${id}/actions/place`, "POST", {expected_version: v, data: {preferred_stack: stack || null}});
+    toast(c.state === "placed" ? `已落位 ${c.stack_code} 第${c.layer_no}层` : `放不下，留待落区：${c.pending_reason}`, c.state === "placed");
+    await loadAll();
+  } catch (e) { toast(e.message); }
+}
+async function reassign(id, v, zoneSelectId, stack) {
+  const zone = document.getElementById(zoneSelectId).value;
+  try { const c = await api(`/api/containers/${id}/actions/reassign`, "POST", {expected_version: v, data: {new_zone_code: zone, preferred_stack: stack || null}});
+    toast(c.state === "placed" ? `已改配至 ${c.payload.zone_code}/${c.stack_code}（原箱位已释放）` : `新箱区也放不下：${c.pending_reason}`, c.state === "placed");
+    await loadAll();
+  } catch (e) { toast(e.message); }
+}
+async function releaseBox(id, v) {
+  const reason = prompt("释放原因"); if (!reason) return;
+  try { await api(`/api/containers/${id}/actions/release`, "POST", {expected_version: v, data: {reason}}); toast("已释放回待落区", true); await loadAll(); }
+  catch (e) { toast(e.message); }
+}
+async function tally(zone) {
+  try { const t = await api("/api/tallies", "POST", {data: {zone_code: zone}}); toast(`${zone}区理货完成，版本 v${t.data_version}`, true); await loadAll(); }
+  catch (e) { toast(e.message); }
+}
+async function createPlan() {
+  const data = {vessel: p_vessel.value.trim(), zone_code: p_zone.value, crane_code: p_crane.value, plan_date: p_date.value,
+    start_hour: Number(p_start.value), end_hour: Number(p_end.value), container_nos: p_nos.value.split(",").map(s => s.trim().toUpperCase()).filter(Boolean)};
+  try { await api("/api/plans", "POST", {reference: p_ref.value.trim(), data}); toast("装船计划已编制（草稿）", true); await loadAll(); }
+  catch (e) { toast(e.message); }
+}
+async function planAction(id, v, action, data) {
+  try { await api(`/api/plans/${id}/actions/${action}`, "POST", {expected_version: v, data}); toast("操作成功", true); await loadAll(); }
+  catch (e) { toast(e.message); }
+}
+async function cancelPlan(id, v) {
+  const reason = prompt("取消原因"); if (!reason) return;
+  try { await api(`/api/plans/${id}/actions/cancel`, "POST", {expected_version: v, data: {cancel_reason: reason}}); toast("计划已取消", true); await loadAll(); }
+  catch (e) { toast(e.message); }
+}
+async function showTimeline(type, id) {
+  const path = type === "container" ? `/api/containers/${id}/audit` : `/api/plans/${id}/audit`;
+  const data = await api(path);
+  const el = document.getElementById("timeline");
+  el.style.display = "block";
+  el.textContent = data.items.map(e => `${e.created_at}  ${e.action}  by ${e.actor_id}\n${JSON.stringify(e.details, null, 2)}`).join("\n\n");
+  el.scrollIntoView({behavior: "smooth"});
+}
+async function loadAll() {
+  try { await loadReference(); await loadZones(); await loadContainers(); await loadPlans(); }
+  catch (e) { toast(e.message); }
+}
+loadAll();
+</script>
+</body>
+</html>

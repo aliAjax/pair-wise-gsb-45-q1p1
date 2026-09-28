@@ -6,6 +6,6 @@
   "projectForm": "完整项目",
   "codeScope": "backend, frontend",
   "languages": ["Python", "HTML", "CSS", "JavaScript"],
-  "summary": "港口泊位与航道调度服务，覆盖靠泊可行性、吃水安全、时间窗冲突和审计状态机。",
+  "summary": "港口调度服务，覆盖泊位靠泊可行性、危险品箱落位（类别不相容/层数/重量限制）、理货闸门与吊机时段锁定的装船计划及审计状态机。",
   "containerized": false
 }

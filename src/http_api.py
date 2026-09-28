@@ -13,10 +13,18 @@ RECORD_RE = re.compile(r"^/api/records/(\d+)$")
 ACTION_RE = re.compile(r"^/api/records/(\d+)/actions/([a-z_]+)$")
 AUDIT_RE = re.compile(r"^/api/records/(\d+)/audit$")
 
+CONTAINER_RE = re.compile(r"^/api/containers/(\d+)$")
+CONTAINER_AUDIT_RE = re.compile(r"^/api/containers/(\d+)/audit$")
+CONTAINER_ACTION_RE = re.compile(r"^/api/containers/(\d+)/actions/([a-z_]+)$")
+PLAN_RE = re.compile(r"^/api/plans/(\d+)$")
+PLAN_AUDIT_RE = re.compile(r"^/api/plans/(\d+)/audit$")
+PLAN_ACTION_RE = re.compile(r"^/api/plans/(\d+)/actions/([a-z_]+)$")
+ZONE_AUDIT_RE = re.compile(r"^/api/zones/([A-Za-z0-9_-]+)/audit$")
 
-def make_handler(service: Any, static_dir: Path):
+
+def make_handler(service: Any, yard_service: Any, static_dir: Path):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "port-berth/1.0"
+        server_version = "port-yard/1.0"
 
         def log_message(self, fmt: str, *args: Any) -> None:
             return
@@ -65,10 +73,14 @@ def make_handler(service: Any, static_dir: Path):
             try:
                 parsed = urlparse(self.path)
                 if parsed.path == "/health":
-                    self._send(200, {"status": "ok", "service": "port-berth", "database": service.repository.health()})
+                    self._send(200, {"status": "ok", "service": "port-yard", "database": service.repository.health()})
                     return
                 if parsed.path == "/":
                     page = (static_dir / "index.html").read_bytes()
+                    self._send(200, page, "text/html; charset=utf-8")
+                    return
+                if parsed.path == "/yard":
+                    page = (static_dir / "yard.html").read_bytes()
                     self._send(200, page, "text/html; charset=utf-8")
                     return
                 if parsed.path == "/api/records":
@@ -86,6 +98,49 @@ def make_handler(service: Any, static_dir: Path):
                     return
                 if parsed.path == "/api/stats":
                     self._send(200, service.stats(self._actor()))
+                    return
+                # ---------------- 堆场与装船 ----------------
+                if parsed.path == "/api/yard/reference":
+                    self._send(200, yard_service.reference_data(self._actor()))
+                    return
+                if parsed.path == "/api/zones":
+                    self._send(200, {"items": yard_service.zones(self._actor())})
+                    return
+                match = ZONE_AUDIT_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": yard_service.zone_timeline(self._actor(), match.group(1))})
+                    return
+                if parsed.path == "/api/containers":
+                    query = parse_qs(parsed.query)
+                    items = yard_service.list_containers(
+                        self._actor(), state=query.get("state", [None])[0],
+                        limit=int(query.get("limit", ["200"])[0]),
+                    )
+                    self._send(200, {"items": items})
+                    return
+                match = CONTAINER_AUDIT_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": yard_service.container_timeline(self._actor(), int(match.group(1)))})
+                    return
+                match = CONTAINER_RE.match(parsed.path)
+                if match:
+                    self._send(200, yard_service.get_container(self._actor(), int(match.group(1))))
+                    return
+                if parsed.path == "/api/plans":
+                    query = parse_qs(parsed.query)
+                    items = yard_service.list_plans(
+                        self._actor(), state=query.get("state", [None])[0],
+                        limit=int(query.get("limit", ["200"])[0]),
+                    )
+                    self._send(200, {"items": items})
+                    return
+                match = PLAN_AUDIT_RE.match(parsed.path)
+                if match:
+                    self._send(200, {"items": yard_service.plan_timeline(self._actor(), int(match.group(1)))})
+                    return
+                match = PLAN_RE.match(parsed.path)
+                if match:
+                    self._send(200, yard_service.get_plan(self._actor(), int(match.group(1))))
                     return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
@@ -107,6 +162,58 @@ def make_handler(service: Any, static_dir: Path):
                     record = service.act(self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {}))
                     self._send(200, record)
                     return
+                # ---------------- 堆场与装船 ----------------
+                if parsed.path == "/api/containers":
+                    record = yard_service.register_container(self._actor(), body.get("data", {}))
+                    self._send(201, record)
+                    return
+                if parsed.path == "/api/plans":
+                    record = yard_service.create_plan(self._actor(), body.get("reference", ""), body.get("data", {}))
+                    self._send(201, record)
+                    return
+                if parsed.path == "/api/tallies":
+                    data = body.get("data", {})
+                    zone_code = data.get("zone_code", "")
+                    record = yard_service.complete_tally(self._actor(), zone_code)
+                    self._send(200, record)
+                    return
+                match = CONTAINER_ACTION_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    data = body.get("data", {}) or {}
+                    action = match.group(2)
+                    actor = self._actor()
+                    container_id = int(match.group(1))
+                    if action == "place":
+                        record = yard_service.place_container(
+                            actor, container_id, version, data.get("preferred_stack")
+                        )
+                    elif action == "reassign":
+                        record = yard_service.reassign_container(
+                            actor, container_id, version, data.get("new_zone_code"),
+                            data.get("preferred_stack"),
+                        )
+                    elif action == "release":
+                        record = yard_service.release_container(
+                            actor, container_id, version, str(data.get("reason", ""))
+                        )
+                    else:
+                        self._send(404, {"error": "not_found", "message": "动作不存在"})
+                        return
+                    self._send(200, record)
+                    return
+                match = PLAN_ACTION_RE.match(parsed.path)
+                if match:
+                    version = body.get("expected_version")
+                    if not isinstance(version, int):
+                        raise ValidationError("expected_version必须是整数")
+                    record = yard_service.act_plan(
+                        self._actor(), int(match.group(1)), version, match.group(2), body.get("data", {})
+                    )
+                    self._send(200, record)
+                    return
                 self._send(404, {"error": "not_found", "message": "路径不存在"})
             except Exception as exc:
                 self._handle_error(exc)
@@ -114,5 +221,5 @@ def make_handler(service: Any, static_dir: Path):
     return Handler
 
 
-def create_server(host: str, port: int, service: Any, static_dir: Path) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(service, static_dir))
+def create_server(host: str, port: int, service: Any, yard_service: Any, static_dir: Path) -> ThreadingHTTPServer:
+    return ThreadingHTTPServer((host, port), make_handler(service, yard_service, static_dir))
